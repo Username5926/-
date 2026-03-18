@@ -70,7 +70,7 @@ st.title("📊 리더십 진단 보고서 자동 생성기")
 file = st.file_uploader("구글 폼 엑셀 업로드", type=['xlsx'])
 if file:
     df = pd.read_excel(file)
-    final_prs = process_ppt(df, "template.pptx") # 템플릿 파일명 확인
+    final_prs = process_ppt(df, "template.pptx.pptx") # 템플릿 파일명 확인
     
     output = io.BytesIO()
     final_prs.save(output)
