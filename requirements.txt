@@ -1,4 +1,5 @@
+streamlit>=1.31.0
 pandas
 openpyxl
 python-pptx
-streamlit
+altair==4.2.2
