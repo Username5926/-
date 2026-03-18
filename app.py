@@ -20,25 +20,24 @@ STRATEGY_MAPPING = {
     "합법화": [7, 15, 22, 29], "강요": [8, 16, 23, 30]
 }
 
-def duplicate_slide(pres, index):
-    """첫 번째 슬라이드의 레이아웃을 사용하여 완벽하게 복제하는 함수"""
-    template = pres.slides[index]
-    # 인덱스 6 대신 템플릿 슬라이드가 사용 중인 레이아웃을 그대로 가져옴
-    slide_layout = template.slide_layout 
-    copied_slide = pres.slides.add_slide(slide_layout)
+def duplicate_slide_safe(pres, index):
+    """AttributeError를 방지하는 안전한 슬라이드 복제 함수"""
+    source_slide = pres.slides[index]
+    slide_layout = source_slide.slide_layout
+    new_slide = pres.slides.add_slide(slide_layout)
     
-    for shape in template.shapes:
-        el = shape.element
-        newel = deepcopy(el)
-        copied_slide.shapes._spctree.insert_element_before(newel, 'p:extLst')
-    return copied_slide
+    for shape in source_slide.shapes:
+        # 텍스트 박스, 표, 차트 등 모든 개체를 새 슬라이드로 복제
+        new_shape = deepcopy(shape.element)
+        new_slide.shapes._spctree.insert(len(new_slide.shapes), new_shape)
+    return new_slide
 
 def process_all(df, ppt_path, excel_path):
     if not os.path.exists(ppt_path) or not os.path.exists(excel_path):
-        st.error("템플릿 파일이 서버에 없습니다. 파일명을 확인하세요.")
+        st.error(f"템플릿 파일이 없습니다. 확인: {os.listdir('.')}")
         return None, None
 
-    # 1. 엑셀 로드
+    # 1. 엑셀 로드 (원본 양식 유지)
     wb = openpyxl.load_workbook(excel_path)
     template_sheet = wb.active
     
@@ -46,46 +45,42 @@ def process_all(df, ppt_path, excel_path):
     prs = Presentation(ppt_path)
     
     for idx, row in df.iterrows():
-        # 열 이름 대신 인덱스 활용하여 에러 방지
-        name = str(row.iloc[1])
-        scores = row.iloc[2:32].values
+        name = str(row.iloc[1]) # 두 번째 열에서 성함 추출
+        scores = row.iloc[2:32].values # 문항 점수
         
         # 점수 계산
         p_scores = {k: round(sum([float(scores[q-1]) for q in v])/len(v), 2) for k, v in PHASE_MAPPING.items()}
         s_scores = {k: round(sum([float(scores[q-1]) for q in v])/len(v), 2) for k, v in STRATEGY_MAPPING.items()}
         
-        # --- 엑셀: 시트 복제 및 데이터 기입 ---
+        # --- 엑셀: 시트 복제 및 이름/점수 기입 ---
         new_sheet = wb.copy_worksheet(template_sheet)
-        new_sheet.title = name[:30].replace('/', '_') # 시트명 금칙어 처리
-        new_sheet['C1'] = name # 상단 이름1
-        new_sheet['C2'] = name # 상단 이름2 (원본 양식 위치에 맞춰 수정)
-        
+        new_sheet.title = name[:30].replace('/', '_')
+        new_sheet['C1'] = name # 상단 성함 입력
         for i, score in enumerate(scores):
             new_sheet.cell(row=4+i, column=3).value = score
 
         # --- PPT: 슬라이드 복제 및 데이터 기입 ---
-        slide = prs.slides[0] if idx == 0 else duplicate_slide(prs, 0)
+        slide = prs.slides[0] if idx == 0 else duplicate_slide_safe(prs, 0)
 
         for shape in slide.shapes:
             if shape.has_text_frame and "{{NAME}}" in shape.text:
                 shape.text = shape.text.replace("{{NAME}}", name)
             
-            # table_phase 처리 (헤더 포함)
+            # table_phase 처리 (헤더 작성 포함)
             if shape.name == 'table_phase' and shape.has_table:
                 table = shape.table
                 table.cell(0, 0).text, table.cell(0, 1).text = "항목명", "평균점수"
                 for i, (k, v) in enumerate(p_scores.items()):
-                    table.cell(i+1, 0).text = k
-                    table.cell(i+1, 1).text = str(v)
+                    if i + 1 < len(table.rows):
+                        table.cell(i+1, 0).text, table.cell(i+1, 1).text = k, str(v)
 
-            # table_strategy 처리 (헤더 포함 + 모든 항목 기입)
+            # table_strategy 처리 (헤더 작성 포함)
             if shape.name == 'table_strategy' and shape.has_table:
                 table = shape.table
                 table.cell(0, 0).text, table.cell(0, 1).text = "항목명", "평균점수"
                 for i, k in enumerate(STRATEGY_LIST):
-                    if i + 1 < len(table.rows): # 표의 행 개수 확인
-                        table.cell(i+1, 0).text = k
-                        table.cell(i+1, 1).text = str(s_scores[k])
+                    if i + 1 < len(table.rows):
+                        table.cell(i+1, 0).text, table.cell(i+1, 1).text = k, str(s_scores[k])
 
             # 차트 업데이트
             if shape.name == 'chart_phase' and shape.has_chart:
@@ -94,29 +89,25 @@ def process_all(df, ppt_path, excel_path):
                 chart_data.add_series('점수', list(p_scores.values()))
                 shape.chart.replace_data(chart_data)
 
-    # 원본 가이드 시트 삭제
+    # 가이드 시트 삭제 후 버퍼 저장
     wb.remove(template_sheet)
-    
-    ex_buffer = io.BytesIO()
-    wb.save(ex_buffer)
-    ppt_buffer = io.BytesIO()
-    prs.save(ppt_buffer)
-    
-    return ex_buffer.getvalue(), ppt_buffer.getvalue()
+    ex_buf, ppt_buf = io.BytesIO(), io.BytesIO()
+    wb.save(ex_buf)
+    prs.save(ppt_buf)
+    return ex_buf.getvalue(), ppt_buf.getvalue()
 
 # Streamlit UI
-st.title("🚗 넥센타이어 진단 결과 자동 생성기")
+st.title("📊 리더십 진단 통합 리포트 생성기")
 uploaded_file = st.file_uploader("구글 폼 결과 엑셀 업로드", type=['xlsx'])
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
-    # 알려주신 파일명으로 최종 세팅
-    ppt_temp = "template.pptx.pptx"
-    excel_temp = "excel_template.xlsx"
+    # 깃허브에 올린 실제 파일명과 일치해야 함
+    ppt_temp, excel_temp = "template.pptx.pptx", "excel_template.xlsx"
     
     xlsx_out, ppt_out = process_all(df, ppt_temp, excel_temp)
     
     if xlsx_out:
-        st.success("🎉 모든 데이터 분석 및 리포트 생성이 완료되었습니다!")
+        st.success("🎉 분석 완료! 아래 버튼으로 결과물을 다운로드하세요.")
         st.download_button("📂 1. 응답자별 시트 엑셀 다운로드", xlsx_out, "진단결과_전체시트.xlsx")
         st.download_button("📊 2. 통합 PPT 보고서 다운로드", ppt_out, "최종진단보고서.pptx")
