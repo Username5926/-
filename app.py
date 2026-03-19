@@ -150,13 +150,92 @@ def _new_guids(s):
 
 def _ws_name(n): return f"Microsoft_Excel_Worksheet{n if n>0 else ''}.xlsx"
 
+# ── 차트 색상 / 동그라미 위치 상수 (역산으로 구한 실제 플롯 영역) ──
+_PHASE_PLOT_X = 2412488;  _PHASE_BAR_W = 1244294   # 6개 막대
+_STRAT_PLOT_X = 2351917;  _STRAT_BAR_W = 763098    # 10개 막대
+_CIRCLE_PHASE_Y  = 3213000;  _CIRCLE_PHASE_CY  = 437638
+_CIRCLE_STRAT_Y  = 6021000;  _CIRCLE_STRAT_CY  = 465643
+
+def _bar_cx_phase(idx):
+    return int(_PHASE_PLOT_X + (idx + 0.5) * _PHASE_BAR_W)
+
+def _bar_cx_strat(idx):
+    return int(_STRAT_PLOT_X + (idx + 0.5) * _STRAT_BAR_W)
+
+def _update_chart_phase_colors(chart_bytes, vals):
+    """최대→파란색(4480B1), 최소→빨간색(C00000)"""
+    s = chart_bytes.decode('utf-8')
+    max_idx = vals.index(max(vals))
+    min_idx = vals.index(min(vals))
+    s = re.sub(r'<c:dPt>.*?</c:dPt>', '', s, flags=re.DOTALL)
+    dpts = (
+        f'<c:dPt><c:idx val="{max_idx}"/><c:invertIfNegative val="0"/><c:bubble3D val="0"/>'
+        f'<c:spPr><a:solidFill><a:srgbClr val="4480B1"/></a:solidFill><a:ln><a:noFill/></a:ln><a:effectLst/></c:spPr></c:dPt>'
+        f'<c:dPt><c:idx val="{min_idx}"/><c:invertIfNegative val="0"/><c:bubble3D val="0"/>'
+        f'<c:spPr><a:solidFill><a:srgbClr val="C00000"/></a:solidFill><a:ln><a:noFill/></a:ln><a:effectLst/></c:spPr></c:dPt>'
+    )
+    s = s.replace('<c:dLbls>', dpts + '<c:dLbls>', 1)
+    return s.encode('utf-8')
+
+def _update_chart_strategy_colors(chart_bytes, vals):
+    """전체 노란색(FFD000), 소프트평균(idx=3)·하드평균(idx=9)만 남색(2D5576)"""
+    s = chart_bytes.decode('utf-8')
+    s = re.sub(r'<c:dPt>.*?</c:dPt>', '', s, flags=re.DOTALL)
+    s = re.sub(
+        r'(<c:spPr>)<a:solidFill>.*?</a:solidFill>',
+        r'\1<a:solidFill><a:srgbClr val="FFD000"/></a:solidFill>',
+        s, count=1, flags=re.DOTALL
+    )
+    dpts = ''
+    for idx in [3, 9]:
+        if idx < len(vals):
+            dpts += (
+                f'<c:dPt><c:idx val="{idx}"/><c:invertIfNegative val="0"/><c:bubble3D val="0"/>'
+                f'<c:spPr><a:solidFill><a:srgbClr val="2D5576"/></a:solidFill><a:ln><a:noFill/></a:ln><a:effectLst/></c:spPr></c:dPt>'
+            )
+    s = s.replace('<c:dLbls>', dpts + '<c:dLbls>', 1)
+    return s.encode('utf-8')
+
+def _move_circle(slide_str, circle_name, new_x, new_y, new_cx, new_cy):
+    idx = slide_str.find(f'name="{circle_name}"')
+    if idx == -1: return slide_str
+    start = slide_str.rfind('<p:pic>', 0, idx)
+    end   = slide_str.find('</p:pic>', idx) + len('</p:pic>')
+    pic   = slide_str[start:end]
+    pic   = re.sub(r'<a:off x="[^"]*" y="[^"]*"/>', f'<a:off x="{new_x}" y="{new_y}"/>', pic)
+    pic   = re.sub(r'<a:ext cx="[^"]*" cy="[^"]*"/>', f'<a:ext cx="{new_cx}" cy="{new_cy}"/>', pic)
+    return slide_str[:start] + pic + slide_str[end:]
+
+def _update_circles(slide_str, comp_vals, strat_vals):
+    # phase: circle2=최대값 막대, circle1=최소값 막대
+    max_idx = comp_vals.index(max(comp_vals))
+    min_idx = comp_vals.index(min(comp_vals))
+    cw_p = int(_PHASE_BAR_W * 0.85)
+    slide_str = _move_circle(slide_str, 'circle2',
+        _bar_cx_phase(max_idx) - cw_p//2, _CIRCLE_PHASE_Y, cw_p, _CIRCLE_PHASE_CY)
+    slide_str = _move_circle(slide_str, 'circle1',
+        _bar_cx_phase(min_idx) - cw_p//2, _CIRCLE_PHASE_Y, cw_p, _CIRCLE_PHASE_CY)
+
+    # strategy: 평균(idx=3,9) 제외하고 평균과 차이 큰 상위 3개
+    avg = sum(strat_vals) / len(strat_vals)
+    candidates = [(i, v) for i, v in enumerate(strat_vals) if i not in (3, 9)]
+    top3 = sorted([i for i, _ in sorted(candidates, key=lambda x: abs(x[1]-avg), reverse=True)[:3]])
+    cw_s = int(_STRAT_BAR_W * 0.85)
+    for ci, data_idx in enumerate(top3):
+        slide_str = _move_circle(slide_str, f'circle{ci+3}',
+            _bar_cx_strat(data_idx) - cw_s//2, _CIRCLE_STRAT_Y, cw_s, _CIRCLE_STRAT_CY)
+    return slide_str
+
 def _fill_slide(sl_str, person, result):
     c=result["competency"]; s=result["skill_raw"]; sa=result["soft_avg"]; ha=result["hard_avg"]
     phase_data = list(c.items())
     strat_data = [(k,s[k]) for k in SOFT_SKILLS]+[("소프트스킬 평균",sa)]+[(k,s[k]) for k in HARD_SKILLS]+[("하드스킬 평균",ha)]
+    comp_vals  = list(c.values())
+    strat_vals = [s[k] for k in SOFT_SKILLS]+[sa]+[s[k] for k in HARD_SKILLS]+[ha]
     sl_str = sl_str.replace("{{NAME}}", person["name"])
     sl_str = _inject_table(sl_str, "table_phase",    phase_data)
     sl_str = _inject_table(sl_str, "table_strategy", strat_data)
+    sl_str = _update_circles(sl_str, comp_vals, strat_vals)
     return sl_str
 
 def build_ppt(people, ppt_tpl: bytes) -> bytes:
@@ -193,14 +272,18 @@ def build_ppt(people, ppt_tpl: bytes) -> bytes:
         if i == 0:
             sl = _fill_slide(files["ppt/slides/slide1.xml"].decode('utf-8'), person, result)
             files["ppt/slides/slide1.xml"] = sl.encode('utf-8')
-            files["ppt/charts/chart1.xml"] = _replace_chart_vals(files["ppt/charts/chart1.xml"], comp_vals)
-            files["ppt/charts/chart2.xml"] = _replace_chart_vals(files["ppt/charts/chart2.xml"], strat_vals)
+            files["ppt/charts/chart1.xml"] = _update_chart_phase_colors(
+                _replace_chart_vals(files["ppt/charts/chart1.xml"], comp_vals), comp_vals)
+            files["ppt/charts/chart2.xml"] = _update_chart_strategy_colors(
+                _replace_chart_vals(files["ppt/charts/chart2.xml"], strat_vals), strat_vals)
 
         elif i == 1:
             sl = _fill_slide(files["ppt/slides/slide2.xml"].decode('utf-8'), person, result)
             files["ppt/slides/slide2.xml"] = sl.encode('utf-8')
-            files["ppt/charts/chart3.xml"] = _replace_chart_vals(files["ppt/charts/chart3.xml"], comp_vals)
-            files["ppt/charts/chart4.xml"] = _replace_chart_vals(files["ppt/charts/chart4.xml"], strat_vals)
+            files["ppt/charts/chart3.xml"] = _update_chart_phase_colors(
+                _replace_chart_vals(files["ppt/charts/chart3.xml"], comp_vals), comp_vals)
+            files["ppt/charts/chart4.xml"] = _update_chart_strategy_colors(
+                _replace_chart_vals(files["ppt/charts/chart4.xml"], strat_vals), strat_vals)
 
         else:
             sn = i+1
@@ -217,8 +300,10 @@ def build_ppt(people, ppt_tpl: bytes) -> bytes:
                 .replace(b"chart3.xml", f"chart{ca}.xml".encode())
                 .replace(b"chart4.xml", f"chart{cb}.xml".encode())
             )
-            files[f"ppt/charts/chart{ca}.xml"] = _replace_chart_vals(orig_c3, comp_vals)
-            files[f"ppt/charts/chart{cb}.xml"] = _replace_chart_vals(orig_c4, strat_vals)
+            files[f"ppt/charts/chart{ca}.xml"] = _update_chart_phase_colors(
+                _replace_chart_vals(orig_c3, comp_vals), comp_vals)
+            files[f"ppt/charts/chart{cb}.xml"] = _update_chart_strategy_colors(
+                _replace_chart_vals(orig_c4, strat_vals), strat_vals)
             files[f"ppt/charts/_rels/chart{ca}.xml.rels"] = (
                 orig_c3r
                 .replace(b"chart3.xml",  f"chart{ca}.xml".encode())
