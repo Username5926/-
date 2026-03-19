@@ -245,7 +245,7 @@ def _get_strat_circle_targets(strat_vals, threshold=0.3):
     return sorted([i for i, _ in combined])
 
 def _update_circles(slide_str, comp_vals, strat_vals):
-    # phase: circle2=최대값 막대, circle1=최소값 막대 (동값이면 각각 첫 번째)
+    # phase: circle2=최대값 막대, circle1=최소값 막대
     max_val = max(comp_vals); min_val = min(comp_vals)
     max_idx = comp_vals.index(max_val)
     min_idx = comp_vals.index(min_val)
@@ -258,9 +258,15 @@ def _update_circles(slide_str, comp_vals, strat_vals):
     # strategy: Pull/Push 각 평균 기준 ±0.3, 최대 3개
     targets = _get_strat_circle_targets(strat_vals)
     cw_s = int(_STRAT_BAR_W * 0.85)
-    for ci, data_idx in enumerate(targets):
-        slide_str = _move_circle(slide_str, f'circle{ci+3}',
-            _bar_cx_strat(data_idx) - cw_s//2, _CIRCLE_STRAT_Y, cw_s, _CIRCLE_STRAT_CY)
+    OFF_SCREEN = -5000000  # 화면 밖 좌표 (사용 안 하는 circle 숨김)
+    for ci in range(3):  # circle3, circle4, circle5
+        if ci < len(targets):
+            slide_str = _move_circle(slide_str, f'circle{ci+3}',
+                _bar_cx_strat(targets[ci]) - cw_s//2, _CIRCLE_STRAT_Y, cw_s, _CIRCLE_STRAT_CY)
+        else:
+            # 사용 안 하는 circle은 화면 밖으로
+            slide_str = _move_circle(slide_str, f'circle{ci+3}',
+                OFF_SCREEN, OFF_SCREEN, cw_s, _CIRCLE_STRAT_CY)
     return slide_str
 
 def _fill_slide(sl_str, person, result):
