@@ -52,13 +52,41 @@ def compute(scores):
 # ══════════════════════════════════════════════════════════════════
 def parse_people(raw: bytes) -> list:
     df = pd.read_excel(io.BytesIO(raw), header=0)
+    cols = [str(c).strip() for c in df.columns]
+
+    # 성함 열 찾기: "성함"/"이름"/"name" 포함하는 열 우선, 없으면 B열(iloc[1])
+    name_col = None
+    for i, c in enumerate(cols):
+        if any(k in c.lower() for k in ["성함", "이름", "name"]):
+            name_col = i
+            break
+    if name_col is None:
+        name_col = 1  # 기본값: B열
+
+    # Q1~Q30 열 찾기: "q1"~"q30" 포함하는 열 우선, 없으면 name_col 다음 30개
+    q_cols = {}
+    for i, c in enumerate(cols):
+        cl = c.lower().replace(" ", "").replace(".", "")
+        for q in range(1, 31):
+            if cl.startswith(f"q{q}") or cl == f"{q}":
+                if q not in q_cols:
+                    q_cols[q] = i
+    if len(q_cols) < 30:
+        # 열 이름으로 못 찾으면 위치 기반으로 fallback
+        q_cols = {q: name_col + q for q in range(1, 31)}
+
     out = []
     for _, row in df.iterrows():
-        name = str(row.iloc[1]).strip()
+        name = str(row.iloc[name_col]).strip()
         if not name or name.lower() == "nan":
             continue
-        scores = {str(q): float(row.iloc[q+1]) if pd.notna(row.iloc[q+1]) else 0.0
-                  for q in range(1, 31)}
+        scores = {}
+        for q in range(1, 31):
+            try:
+                val = row.iloc[q_cols[q]]
+                scores[str(q)] = float(val) if pd.notna(val) else 0.0
+            except:
+                scores[str(q)] = 0.0
         out.append({"name": name, "scores": scores})
     return out
 
@@ -375,22 +403,15 @@ def find_template(ext: str):
 # UI
 # ══════════════════════════════════════════════════════════════════
 st.set_page_config(page_title="리더십 진단 보고서 자동화", layout="wide")
-st.title("📊 리더십 진단 보고서 자동화 툴")
-
-with st.sidebar:
-    st.header("🔍 환경")
-    try:
-        files = [f.name for f in sorted(Path(__file__).parent.iterdir()) if f.is_file()]
-        st.write("파일:", files)
-    except Exception as e:
-        st.write(f"오류: {e}")
-    _, ep = find_template(".xlsx")
-    _, pp = find_template(".pptx")
-    st.write("📁 엑셀:", ep or "❌")
-    st.write("📁 PPT:", pp or "❌")
+st.title("CLiCK IAM MICRO _ 리더십 영향력 진단 보고서")
 
 st.markdown("---")
-response_file = st.file_uploader("구글 폼 응답 엑셀 업로드", type=["xlsx","xls"])
+st.markdown("""
+**📋 업로드 전 확인사항**
+- 구글 폼 응답을 엑셀로 다운로드한 파일을 업로드해주세요
+- **A열**: 타임스탬프 / **B열**: 성함 / **C열~AF열**: Q1~Q30 응답값 (1~5점)
+""")
+response_file = st.file_uploader("구글 폼 응답 엑셀 (.xlsx)", type=["xlsx","xls"])
 st.markdown("---")
 
 if st.button("🚀 보고서 생성", type="primary", use_container_width=True):
