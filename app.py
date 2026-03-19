@@ -144,7 +144,12 @@ def _replace_chart_vals(chart_bytes, new_vals):
     fmt = re.search(r'<c:formatCode>[^<]*</c:formatCode>', val_m.group(2))
     fmt_tag = fmt.group(0) if fmt else '<c:formatCode>0.00</c:formatCode>'
     pts = ''.join(f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>' for i,v in enumerate(new_vals))
-    return (s[:val_m.start()] + before + f'{fmt_tag}<c:ptCount val="{len(new_vals)}"/>{pts}' + val_m.group(3) + s[val_m.end():]).encode('utf-8')
+    s = (s[:val_m.start()] + before + f'{fmt_tag}<c:ptCount val="{len(new_vals)}"/>{pts}' + val_m.group(3) + s[val_m.end():])
+    # y축 범위 0~5 고정
+    s = re.sub(r'<c:scaling>.*?</c:scaling>',
+               '<c:scaling><c:orientation val="minMax"/><c:max val="5"/><c:min val="0"/></c:scaling>',
+               s, flags=re.DOTALL)
+    return s.encode('utf-8')
 
 def _new_guids(s):
     for g in set(re.findall(r'\{[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\}', s)):
@@ -408,7 +413,7 @@ st.title("CLiCK IAM MICRO _ 리더십 영향력 진단 보고서")
 st.markdown("---")
 st.markdown("""
 **📋 업로드 전 확인사항**
-- 구글 폼 응답을 엑셀로 다운로드하여 업로드해주세요
+- 구글 폼 응답을 엑셀로 다운로드한 파일을 업로드해주세요
 """)
 response_file = st.file_uploader("구글 폼 응답 엑셀 (.xlsx)", type=["xlsx","xls"])
 st.markdown("---")
