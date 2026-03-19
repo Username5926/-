@@ -124,22 +124,30 @@ def _clone_chart(pkg, orig, new_name):
     return nc
 
 def _clone_slide(prs, src_idx=0):
-    src  = prs.slides[src_idx]; sp = src.part; pkg = prs.part.package
-    ns   = prs.slides.add_slide(src.slide_layout); np_ = ns.part
-    for ph in list(ns.placeholders): ph._element.getparent().remove(ph._element)
-    for child in list(src.shapes._spTree):
-        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-        if tag in ("nvGrpSpPr","grpSpPr"): continue
-        ns.shapes._spTree.append(copy.deepcopy(child))
-    cc = sum(1 for p in pkg.iter_parts() if str(p.partname).startswith("/ppt/charts/chart"))
-    for rid, rel in sp.rels.items():
-        if rid in np_.rels: continue
-        if "chart" in rel._reltype:
-            cc += 1
-            nc = _clone_chart(pkg, rel._target, PackURI(f"/ppt/charts/chart{cc}.xml"))
-            np_.rels._rels[rid] = _Relationship(np_.partname.baseURI, rel._rId, rel._reltype, rel._target_mode, nc)
-        else:
-            np_.rels._rels[rid] = _Relationship(np_.partname.baseURI, rel._rId, rel._reltype, rel._target_mode, rel._target)
+    src = prs.slides[src_idx]
+    # 1. 원본과 동일한 레이아웃으로 새 슬라이드 추가
+    ns = prs.slides.add_slide(src.slide_layout)
+    
+    # 2. 기본 생성된 플레이스홀더 제거 (겹침 방지)
+    for ph in list(ns.placeholders):
+        ph._element.getparent().remove(ph._element)
+
+    # 3. 원본 슬라이드의 모든 개체를 새 슬라이드로 복사
+    for shape in src.shapes:
+        # 텍스트박스, 이미지, 표, 차트 등을 포함한 모든 XML 요소를 복제
+        new_shape_el = copy.deepcopy(shape.element)
+        ns.shapes._spTree.append(new_shape_el)
+    
+    # 4. 관계(Relationships) 복사 (이미지, 차트 데이터 등 연결 유지)
+    for rel in src.part.rels.values():
+        if "notesSlide" not in rel.reltype:
+            ns.part.rels.get_or_add(
+                rel.reltype,
+                rel.target_ref,
+                rel.is_external,
+                rel.target_part
+            )
+    return ns
 
 def _fill(slide, name, result):
     c=result["competency"]; s=result["skill_raw"]; sa=result["soft_avg"]; ha=result["hard_avg"]
