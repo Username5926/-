@@ -1,4 +1,4 @@
-import streamlit as st
+\import streamlit as st
 import pandas as pd
 import openpyxl
 from openpyxl import load_workbook
@@ -208,41 +208,25 @@ def _move_circle(slide_str, circle_name, new_x, new_y, new_cx, new_cy):
     pic   = re.sub(r'<a:ext cx="[^"]*" cy="[^"]*"/>', f'<a:ext cx="{new_cx}" cy="{new_cy}"/>', pic)
     return slide_str[:start] + pic + slide_str[end:]
 
-def _get_strat_circle_targets(strat_vals, threshold=0.3):
-    """Pull/Push 각각 평균과 ±0.3 초과하는 것. 없으면 최대 1개. 합쳐서 3개 초과시 차이 큰 순으로 3개."""
-    soft_avg = strat_vals[3]
-    hard_avg = strat_vals[9]
+def _get_strat_circle_targets(strat_vals):
+    """Pull(idx 0~2): 소프트스킬 중 최대값. Push(idx 4~8): 하드스킬 중 최대값.
+    동률이면 해당 값 모두 포함. 합쳐서 최대 3개(초과 시 Pull/Push 각 1개 우선 보장)."""
+    pull_vals = [(i, strat_vals[i]) for i in range(3)]
+    push_vals = [(i, strat_vals[i]) for i in range(4, 9)]
 
-    pull_diffs = [(i, abs(strat_vals[i] - soft_avg)) for i in range(3)]
-    push_diffs = [(i, abs(strat_vals[i] - hard_avg)) for i in range(4, 9)]
+    pull_max = max(v for _, v in pull_vals)
+    push_max = max(v for _, v in push_vals)
 
-    pull_over = [(i, d) for i, d in pull_diffs if d >= threshold]
-    push_over = [(i, d) for i, d in push_diffs if d >= threshold]
+    pull_targets = [i for i, v in pull_vals if v == pull_max]
+    push_targets = [i for i, v in push_vals if v == push_max]
 
-    if not pull_over:
-        pull_over = [max(pull_diffs, key=lambda x: x[1])]
-    if not push_over:
-        push_over = [max(push_diffs, key=lambda x: x[1])]
+    combined = pull_targets + push_targets
 
-    combined = pull_over + push_over
-
+    # 3개 초과 시 Pull 1개 + Push 1개로 줄임 (가장 앞 인덱스)
     if len(combined) > 3:
-        combined.sort(key=lambda x: -x[1])
-        selected = combined[:3]
-        # Pull/Push 각 최소 1개 보장
-        if not any(i < 3 for i, _ in selected):
-            best_pull = max(pull_over, key=lambda x: x[1])
-            worst_push = min((x for x in selected if x[0] >= 4), key=lambda x: x[1])
-            selected.remove(worst_push)
-            selected.append(best_pull)
-        if not any(i >= 4 for i, _ in selected):
-            best_push = max(push_over, key=lambda x: x[1])
-            worst_pull = min((x for x in selected if x[0] < 3), key=lambda x: x[1])
-            selected.remove(worst_pull)
-            selected.append(best_push)
-        combined = selected
+        combined = [pull_targets[0], push_targets[0]]
 
-    return sorted([i for i, _ in combined])
+    return sorted(combined)
 
 def _update_circles(slide_str, comp_vals, strat_vals):
     # phase: circle2=최대값 막대, circle1=최소값 막대
