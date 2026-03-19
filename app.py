@@ -43,11 +43,7 @@ SKILL_ROW = {"우호성":12,"동기유발":13,"자문":14,"협력제휴":15,
 # 계산
 # ══════════════════════════════════════════════════════════════════
 def avg_rows(scores, rows):
-    vals = []
-    for r in rows:
-        k = str(r - 3)
-        if k in scores:
-            vals.append(float(scores[k]))
+    vals = [float(scores.get(str(r-3), 0)) for r in rows]
     return round(sum(vals)/len(vals), 2) if vals else 0.0
 
 def compute(scores):
@@ -73,7 +69,7 @@ def parse_people(raw: bytes) -> list:
     return out
 
 # ══════════════════════════════════════════════════════════════════
-# 엑셀 생성  @st.cache_data
+# 엑셀 생성
 # ══════════════════════════════════════════════════════════════════
 def _copy_ws(wb, src, title):
     ws = wb.create_sheet(title=title)
@@ -115,39 +111,58 @@ def build_excel(people_json: str, tpl: bytes) -> bytes:
     buf = io.BytesIO(); wb.save(buf); return buf.getvalue()
 
 # ══════════════════════════════════════════════════════════════════
-# PPT 생성  @st.cache_data
+# PPT 생성
 # ══════════════════════════════════════════════════════════════════
-def _clone_chart(pkg, orig, new_name):
-    nc = ChartPart(new_name, orig.content_type, pkg, copy.deepcopy(orig._element))
+def _clone_chart(pkg, orig, name):
+    nc = ChartPart(name, orig.content_type, pkg, copy.deepcopy(orig._element))
     for rid, rel in orig.rels.items():
         nc.rels._rels[rid] = _Relationship(nc.partname.baseURI, rel._rId, rel._reltype, rel._target_mode, rel._target)
     return nc
 
+def _max_shape_id(prs):
+    max_id = 0
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            try:
+                sid = int(shape.shape_id)
+                if sid > max_id:
+                    max_id = sid
+            except:
+                pass
+    return max_id
+
 def _clone_slide(prs, src_idx=0):
-    src = prs.slides[src_idx]
-    # 1. 원본과 동일한 레이아웃으로 새 슬라이드 추가
-    ns = prs.slides.add_slide(src.slide_layout)
-    
-    # 2. 기본 생성된 플레이스홀더 제거 (겹침 방지)
+    src = prs.slides[src_idx]; sp = src.part; pkg = prs.part.package
+    ns  = prs.slides.add_slide(src.slide_layout); np_ = ns.part
+
     for ph in list(ns.placeholders):
         ph._element.getparent().remove(ph._element)
 
-    # 3. 원본 슬라이드의 모든 개체를 새 슬라이드로 복사
-    for shape in src.shapes:
-        # 텍스트박스, 이미지, 표, 차트 등을 포함한 모든 XML 요소를 복제
-        new_shape_el = copy.deepcopy(shape.element)
-        ns.shapes._spTree.append(new_shape_el)
-    
-    # 4. 관계(Relationships) 복사 (이미지, 차트 데이터 등 연결 유지)
-    for rel in src.part.rels.values():
-        if "notesSlide" not in rel.reltype:
-            ns.part.rels.get_or_add(
-                rel.reltype,
-                rel.target_ref,
-                rel.is_external,
-                rel.target_part
-            )
-    return ns
+    for child in list(src.shapes._spTree):
+        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        if tag in ("nvGrpSpPr", "grpSpPr"):
+            continue
+        ns.shapes._spTree.append(copy.deepcopy(child))
+
+    # ★ 핵심 수정: shape ID 재할당
+    # 복제된 슬라이드의 shape ID가 원본과 동일하면
+    # PowerPoint가 해당 슬라이드를 빈 화면으로 렌더링함
+    start_id = _max_shape_id(prs) + 1
+    for el in ns._element.xpath("//*[local-name()='cNvPr']"):
+        el.set("id", str(start_id))
+        start_id += 1
+
+    cc = sum(1 for p in pkg.iter_parts()
+             if str(p.partname).startswith("/ppt/charts/chart"))
+    for rid, rel in sp.rels.items():
+        if rid in np_.rels:
+            continue
+        if "chart" in rel._reltype:
+            cc += 1
+            nc = _clone_chart(pkg, rel._target, PackURI(f"/ppt/charts/chart{cc}.xml"))
+            np_.rels._rels[rid] = _Relationship(np_.partname.baseURI, rel._rId, rel._reltype, rel._target_mode, nc)
+        else:
+            np_.rels._rels[rid] = _Relationship(np_.partname.baseURI, rel._rId, rel._reltype, rel._target_mode, rel._target)
 
 def _fill(slide, name, result):
     c=result["competency"]; s=result["skill_raw"]; sa=result["soft_avg"]; ha=result["hard_avg"]
@@ -172,7 +187,7 @@ def _fill(slide, name, result):
         elif shape.name == "chart_phase" and shape.has_chart:
             try:
                 cd=ChartData(); cd.categories=list(c.keys())
-                cd.add_series("역량 점수",list(c.values()))
+                cd.add_series("역량 점수", list(c.values()))
                 shape.chart.replace_data(cd)
             except: pass
         elif shape.name == "chart_strategy" and shape.has_chart:
@@ -180,7 +195,7 @@ def _fill(slide, name, result):
                 cats=SOFT_SKILLS+["소프트 평균"]+HARD_SKILLS+["하드 평균"]
                 vals=[s[k] for k in SOFT_SKILLS]+[sa]+[s[k] for k in HARD_SKILLS]+[ha]
                 cd=ChartData(); cd.categories=cats
-                cd.add_series("계열 1",vals)
+                cd.add_series("계열 1", vals)
                 shape.chart.replace_data(cd)
             except: pass
 
@@ -188,10 +203,8 @@ def _fill(slide, name, result):
 def build_ppt(people_json: str, tpl: bytes) -> bytes:
     people = json.loads(people_json)
     prs = Presentation(io.BytesIO(tpl))
-    # 복제: 항상 slides[0] 기준
     for _ in range(len(people) - 1):
         _clone_slide(prs, src_idx=0)
-    # 주입: 인덱스로 접근
     for i, person in enumerate(people):
         _fill(prs.slides[i], person["name"], compute(person["scores"]))
     buf = io.BytesIO(); prs.save(buf); return buf.getvalue()
@@ -218,8 +231,7 @@ st.title("📊 리더십 진단 보고서 자동화 툴")
 with st.sidebar:
     st.header("🔍 환경")
     try:
-        base_dir = Path(__file__).parent
-        files = [f.name for f in sorted(base_dir.iterdir()) if f.is_file()]
+        files = [f.name for f in sorted(Path(__file__).parent.iterdir()) if f.is_file()]
         st.write("루트 파일:", files)
     except Exception as e:
         st.write(f"오류: {e}")
@@ -229,7 +241,6 @@ with st.sidebar:
     st.write("📁 PPT:", pp or "❌")
 
 st.markdown("---")
-
 col1, col2, col3 = st.columns(3)
 with col1:
     response_file  = st.file_uploader("① 구글 폼 응답 엑셀 (필수)", type=["xlsx","xls"])
@@ -240,9 +251,8 @@ with col3:
 
 st.markdown("---")
 
-# ── 생성 버튼: 입력 데이터를 session_state에만 저장 ──
+# ── 생성 버튼: session_state에 입력 저장만 ──
 if st.button("🚀 보고서 생성", type="primary", use_container_width=True):
-
     if response_file is None:
         st.error("❌ 응답 엑셀을 업로드해주세요."); st.stop()
 
@@ -253,7 +263,7 @@ if st.button("🚀 보고서 생성", type="primary", use_container_width=True):
     else:
         excel_tpl, ep = find_template(".xlsx")
         if not excel_tpl:
-            st.error("❌ 엑셀 템플릿 없음. ② 에서 업로드해주세요."); st.stop()
+            st.error("❌ 엑셀 템플릿 없음"); st.stop()
         st.success(f"✅ 엑셀 템플릿 자동: {ep}")
 
     if ppt_tpl_file is not None:
@@ -261,7 +271,7 @@ if st.button("🚀 보고서 생성", type="primary", use_container_width=True):
     else:
         ppt_tpl, pp = find_template(".pptx")
         if not ppt_tpl:
-            st.error("❌ PPT 템플릿 없음. ③ 에서 업로드해주세요."); st.stop()
+            st.error("❌ PPT 템플릿 없음"); st.stop()
         st.success(f"✅ PPT 템플릿 자동: {pp}")
 
     try:
@@ -272,7 +282,6 @@ if st.button("🚀 보고서 생성", type="primary", use_container_width=True):
     if not people:
         st.error("❌ 응답자 없음"); st.stop()
 
-    # ★ session_state에는 입력 데이터(bytes, json)만 저장
     people_json = json.dumps(
         [{"name": p["name"], "scores": p["scores"]} for p in people],
         ensure_ascii=False
@@ -282,20 +291,15 @@ if st.button("🚀 보고서 생성", type="primary", use_container_width=True):
     st.session_state["ppt_tpl"]     = ppt_tpl
     st.session_state["n_people"]    = len(people)
     st.session_state["ready"]       = True
+    st.info(f"👥 {len(people)}명: {[p['name'] for p in people]}")
 
-    st.info(f"👥 {len(people)}명 파싱: {[p['name'] for p in people]}")
-
-# ── 다운로드 영역: st.button 블록 완전히 밖에 위치 ──
-# download_button 클릭 → rerun → st.button=False → 이 블록은 항상 실행
+# ── 다운로드: 버튼 블록 밖 (rerun 후에도 항상 실행) ──
 if st.session_state.get("ready"):
-
     people_json = st.session_state["people_json"]
     excel_tpl   = st.session_state["excel_tpl"]
     ppt_tpl     = st.session_state["ppt_tpl"]
     n           = st.session_state["n_people"]
 
-    # cache_data가 적용된 함수 호출
-    # → 같은 입력이면 rerun 시 캐시에서 즉시 반환
     with st.spinner(f"📊 엑셀 {n}시트 생성 중..."):
         try:
             excel_out = build_excel(people_json, excel_tpl)
@@ -304,8 +308,8 @@ if st.session_state.get("ready"):
 
     with st.spinner(f"📑 PPT {n}슬라이드 생성 중..."):
         try:
-            ppt_out = build_ppt(people_json, ppt_tpl)
-            n_slides = len(Presentation(io.BytesIO(ppt_out)).slides)
+            ppt_out   = build_ppt(people_json, ppt_tpl)
+            n_slides  = len(Presentation(io.BytesIO(ppt_out)).slides)
         except Exception as e:
             st.error(f"❌ PPT 실패: {e}"); st.code(traceback.format_exc()); st.stop()
 
