@@ -432,29 +432,13 @@ if st.button("🚀 보고서 생성", type="primary", use_container_width=True):
 
     if not people: st.error("❌ 응답자 없음"); st.stop()
 
-    st.info(f"👥 {len(people)}명: {[p['name'] for p in people]}")
-
-    with st.expander("📋 점수 미리보기"):
-        rows = []
-        for p in people:
-            r = compute(p["scores"])
-            row = {"성함": p["name"]}
-            row.update({k: f"{v:.2f}" for k,v in r["competency"].items()})
-            row["소프트평균"] = r["soft_avg"]; row["하드평균"] = r["hard_avg"]
-            rows.append(row)
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
-
-    with st.spinner(f"📊 엑셀 {len(people)}시트 생성 중..."):
+    with st.spinner(f"⏳ {len(people)}명 보고서 생성 중..."):
         try:
             excel_out = build_excel(people, excel_tpl)
-            st.success(f"✅ 엑셀 {len(people)}시트 완료")
         except Exception as e:
             st.error(f"❌ 엑셀 실패: {e}"); st.code(traceback.format_exc()); st.stop()
-
-    with st.spinner(f"📑 PPT {len(people)}슬라이드 생성 중..."):
         try:
             ppt_out = build_ppt(people, ppt_tpl)
-            st.success(f"✅ PPT {len(people)}슬라이드 완료")
         except Exception as e:
             st.error(f"❌ PPT 실패: {e}"); st.code(traceback.format_exc()); st.stop()
 
