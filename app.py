@@ -408,6 +408,35 @@ def find_template(ext: str):
 # UI
 # ══════════════════════════════════════════════════════════════════
 st.set_page_config(page_title="리더십 영향력 진단 결과 자동화", layout="wide")
+
+# ── 사이드바: 문항 매핑 참고 ──
+with st.sidebar:
+    st.markdown("### 📋 문항 매핑 참고")
+    st.caption("이미지를 클릭하면 확대됩니다")
+
+    def find_image(filename):
+        base = Path(__file__).parent
+        p = base / filename
+        if p.exists(): return str(p)
+        p2 = Path(os.getcwd()) / filename
+        if p2.exists(): return str(p2)
+        return None
+
+    img_stage    = find_image("mapping_stage.jpg")
+    img_strategy = find_image("mapping_strategy.jpg")
+
+    if img_stage:
+        st.markdown("**▶ 리더십 영향력 단계**")
+        st.image(img_stage, use_container_width=True)
+    else:
+        st.warning("mapping_stage.jpg 없음")
+
+    if img_strategy:
+        st.markdown("**▶ 리더십 영향력 전략**")
+        st.image(img_strategy, use_container_width=True)
+    else:
+        st.warning("mapping_strategy.jpg 없음")
+
 st.title("CLiCK _ 리더십 영향력 진단 결과 자동화")
 
 st.markdown("---")
