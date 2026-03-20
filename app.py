@@ -407,7 +407,7 @@ def find_template(ext: str):
 # ══════════════════════════════════════════════════════════════════
 # UI
 # ══════════════════════════════════════════════════════════════════
-st.set_page_config(page_title="리더십 영향력 진단 결과 자동화", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="리더십 영향력 진단 결과 자동화", layout="wide")
 
 # ── 사이드바: 문항 매핑 참고 ──
 with st.sidebar:
